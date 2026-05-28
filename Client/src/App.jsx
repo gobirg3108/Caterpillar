@@ -1,11 +1,11 @@
-import React from 'react'
+import ButtonController from "./Components/Button_Controller/buttonController";
 
 function App() {
   return (
-    <div>
-      <h1>CaterPillar</h1>
-    </div>
-  )
+    <>
+      <ButtonController />
+    </>
+  );
 }
 
-export default App
+export default App;
