@@ -1,8 +1,7 @@
-@import "tailwindcss";
-
+* { box-sizing: border-box; }
 body {
   margin: 0;
   padding: 0;
-  font-family: sans-serif;
-  background: black;
+  background: #09090b;
 }
+button { font-family: inherit; }

@@ -1,218 +1,553 @@
-import React, { useState } from "react";
+import React, { useState, useCallback } from "react";
 
-const buttonsTop = [
-  { label: "MEMORY", color: "green" },
-  { label: "EDIT", color: "yellow" },
-  { label: "MDI", color: "yellow" },
-  { label: "OPTIONAL STOP", color: "yellow" },
-  { label: "SINGLE BLOCK", color: "yellow" },
-  { label: "FEED HOLD", color: "red" },
-];
-
-const buttonsBottom = [
-  { label: "TABLE STOP", color: "red" },
-  { label: "CYCLE START", color: "green" },
-  { label: "COOLANT ON", color: "green" },
-  { label: "BLOCK SKIP", color: "yellow" },
-  { label: "RESET", color: "red" },
-  { label: "DOOR I/L", color: "green" },
-];
-
-const getButtonColor = (color, active) => {
-  if (!active) return "bg-zinc-700";
-
-  switch (color) {
-    case "green":
-      return "bg-green-500 shadow-green-400";
-    case "yellow":
-      return "bg-yellow-400 shadow-yellow-300";
-    case "red":
-      return "bg-red-500 shadow-red-400";
-    default:
-      return "bg-zinc-500";
-  }
-};
+const API_BASE = "http://localhost:5000";
 
 const sendCommand = async (endpoint) => {
-  try {
-    const response = await fetch(`http://localhost:5000/${endpoint}`, {
-      method: "POST",
-    });
-
-    const data = await response.json();
-
-    console.log(data);
-  } catch (error) {
-    console.log(error);
-  }
+  const res = await fetch(`${API_BASE}/${endpoint}`, { method: "POST" });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
 };
 
-const CNCButton = ({ label, color }) => {
-  const [active, setActive] = useState(true);
+const BUTTONS_TOP = [
+  { label: "MEMORY", color: "green", endpoint: null },
+  { label: "EDIT", color: "yellow", endpoint: null },
+  { label: "MDI", color: "yellow", endpoint: null },
+  { label: "OPTIONAL STOP", color: "yellow", endpoint: "optional-stop" },
+  { label: "SINGLE BLOCK", color: "yellow", endpoint: "single-block" },
+  { label: "FEED HOLD", color: "red", endpoint: "feed-hold" },
+];
+
+const BUTTONS_BOTTOM = [
+  { label: "TABLE STOP", color: "red", endpoint: null },
+  { label: "CYCLE START", color: "green", endpoint: "cycle-start" },
+  { label: "COOLANT ON", color: "green", endpoint: "coolant" },
+  { label: "BLOCK SKIP", color: "yellow", endpoint: "block-skip" },
+  { label: "RESET", color: "red", endpoint: "reset" },
+  { label: "DOOR I/L", color: "green", endpoint: null },
+];
+
+const COLOR_STYLES = {
+  green: {
+    active: "#22c55e",
+    glow: "0 0 18px #22c55e88",
+    indicator: "#16a34a",
+  },
+  yellow: {
+    active: "#eab308",
+    glow: "0 0 18px #eab30888",
+    indicator: "#ca8a04",
+  },
+  red: { active: "#ef4444", glow: "0 0 18px #ef444488", indicator: "#dc2626" },
+};
+
+function CNCButton({ label, color, endpoint }) {
+  const [lit, setLit] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [flash, setFlash] = useState(false);
+
+  const style = COLOR_STYLES[color];
+
+  const handleClick = useCallback(async () => {
+    setLit((v) => !v);
+    if (!endpoint) return;
+    setBusy(true);
+    try {
+      await sendCommand(endpoint);
+      setFlash(true);
+      setTimeout(() => setFlash(false), 600);
+    } catch (e) {
+      console.error(endpoint, e);
+    } finally {
+      setBusy(false);
+    }
+  }, [endpoint]);
+
+  const btnColor = lit ? style.active : "#3f3f46";
+  const btnShadow = lit ? style.glow : "none";
 
   return (
-    <div className="flex flex-col items-center gap-2">
-      <div className="text-white text-xs font-semibold text-center h-8">
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        gap: 8,
+      }}
+    >
+      <span
+        style={{
+          color: lit ? "#f4f4f5" : "#71717a",
+          fontSize: 10,
+          fontWeight: 700,
+          letterSpacing: "0.08em",
+          textAlign: "center",
+          height: 28,
+          display: "flex",
+          alignItems: "flex-end",
+          justifyContent: "center",
+          lineHeight: 1.2,
+          fontFamily: "'Courier New', monospace",
+        }}
+      >
         {label}
-      </div>
+      </span>
 
       <button
-        onClick={() => {
-          setActive(!active);
-
-          if (label === "CYCLE START") {
-            sendCommand("cycle-start");
-          }
-
-          if (label === "FEED HOLD") {
-            sendCommand("feed-hold");
-          }
-
-          if (label === "RESET") {
-            sendCommand("reset");
-          }
-
-          if (label === "COOLANT ON") {
-            sendCommand("coolant");
-          }
+        onClick={handleClick}
+        disabled={busy}
+        style={{
+          width: 60,
+          height: 60,
+          borderRadius: "50%",
+          border: `3px solid ${lit ? style.indicator : "#27272a"}`,
+          background: btnColor,
+          boxShadow: btnShadow,
+          cursor: busy ? "wait" : "pointer",
+          transition: "all 0.15s ease",
+          transform: flash ? "scale(0.9)" : "scale(1)",
+          position: "relative",
+          outline: "none",
         }}
-        className={`
-          w-16 h-16 rounded-full border-4 border-zinc-800
-          transition-all duration-150
-          shadow-lg
-          cursor-pointer
-
-          hover:scale-110
-          hover:brightness-125
-          hover:shadow-2xl
-
-          active:scale-95
-          active:translate-y-1
-
-          ${getButtonColor(color, active)}`}
       >
-        <div className="w-full h-full rounded-full border border-white/20"></div>
+        <div
+          style={{
+            position: "absolute",
+            inset: 4,
+            borderRadius: "50%",
+            background:
+              "linear-gradient(145deg, rgba(255,255,255,0.25) 0%, transparent 60%)",
+            pointerEvents: "none",
+          }}
+        />
       </button>
+
+      <div
+        style={{
+          width: 6,
+          height: 6,
+          borderRadius: "50%",
+          background: lit ? style.active : "#3f3f46",
+          boxShadow: lit ? style.glow : "none",
+          transition: "all 0.2s",
+        }}
+      />
     </div>
   );
-};
+}
 
-const RotaryKnob = () => {
-  const [rotation, setRotation] = useState(0);
+function RotaryKnob() {
+  const [angle, setAngle] = useState(0);
+  const labels = ["-50", "-25", "0", "+25", "+50"];
+  const min = -120,
+    max = 120;
 
-  const rotateLeft = () => {
-    setRotation((prev) => Math.max(prev - 10, -120));
-  };
+  const rotate = (delta) =>
+    setAngle((v) => Math.max(min, Math.min(max, v + delta)));
 
-  const rotateRight = () => {
-    setRotation((prev) => Math.min(prev + 10, 120));
-  };
+  const pct = ((angle - min) / (max - min)) * 100;
 
   return (
-    <div className="flex flex-col items-center">
-      <div className="relative w-32 h-32 flex items-center justify-center">
-        {/* Outer Circle */}
-        <div className="absolute w-full h-full rounded-full border-4 border-zinc-500"></div>
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        gap: 12,
+      }}
+    >
+      <span
+        style={{
+          color: "#71717a",
+          fontSize: 9,
+          fontWeight: 700,
+          letterSpacing: "0.1em",
+          fontFamily: "monospace",
+        }}
+      >
+        FEED RATE
+      </span>
 
-        {/* Knob */}
+      <div style={{ position: "relative", width: 112, height: 112 }}>
+        <svg
+          width={112}
+          height={112}
+          style={{ position: "absolute", top: 0, left: 0 }}
+        >
+          <circle
+            cx={56}
+            cy={56}
+            r={52}
+            fill="none"
+            stroke="#3f3f46"
+            strokeWidth={3}
+          />
+          <circle cx={56} cy={56} r={44} fill="#18181b" />
+          {labels.map((l, i) => {
+            const a =
+              ((i / (labels.length - 1)) * 240 - 120) * (Math.PI / 180) -
+              Math.PI / 2;
+            const r = 50;
+            return (
+              <text
+                key={l}
+                x={56 + r * Math.cos(a)}
+                y={56 + r * Math.sin(a) + 3}
+                textAnchor="middle"
+                fontSize={8}
+                fill="#52525b"
+                fontFamily="monospace"
+              >
+                {l}
+              </text>
+            );
+          })}
+        </svg>
+
         <div
-          className="w-20 h-20 bg-zinc-400 rounded-full border-4 border-zinc-700 relative transition-transform duration-200"
           style={{
-            transform: `rotate(${rotation}deg)`,
+            position: "absolute",
+            top: "50%",
+            left: "50%",
+            width: 72,
+            height: 72,
+            borderRadius: "50%",
+            background: "linear-gradient(135deg, #52525b, #27272a)",
+            border: "3px solid #3f3f46",
+            transform: `translate(-50%, -50%) rotate(${angle}deg)`,
+            transition: "transform 0.2s ease",
+            boxShadow: "0 4px 12px rgba(0,0,0,0.6)",
+            display: "flex",
+            alignItems: "flex-start",
+            justifyContent: "center",
+            paddingTop: 6,
           }}
         >
-          <div className="absolute top-1 left-1/2 -translate-x-1/2 w-2 h-8 bg-white rounded"></div>
+          <div
+            style={{
+              width: 4,
+              height: 16,
+              background: "#f4f4f5",
+              borderRadius: 2,
+            }}
+          />
         </div>
       </div>
 
-      <div className="flex gap-3 mt-4">
-        <button
-          onClick={rotateLeft}
-          className="px-3 py-1 bg-zinc-700 text-white rounded"
-        >
-          -
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <button onClick={() => rotate(-10)} style={knobBtnStyle}>
+          −
         </button>
-
-        <button
-          onClick={rotateRight}
-          className="px-3 py-1 bg-zinc-700 text-white rounded"
+        <span
+          style={{
+            color: "#a1a1aa",
+            fontSize: 11,
+            fontFamily: "monospace",
+            minWidth: 48,
+            textAlign: "center",
+          }}
         >
+          {angle > 0 ? "+" : ""}
+          {angle}°
+        </span>
+        <button onClick={() => rotate(10)} style={knobBtnStyle}>
           +
         </button>
       </div>
 
-      <div className="text-white mt-2 text-sm">{rotation}°</div>
+      <div
+        style={{
+          width: 88,
+          height: 4,
+          background: "#27272a",
+          borderRadius: 2,
+          overflow: "hidden",
+        }}
+      >
+        <div
+          style={{
+            height: "100%",
+            width: `${pct}%`,
+            background: "#22c55e",
+            transition: "width 0.2s",
+          }}
+        />
+      </div>
     </div>
   );
+}
+
+const knobBtnStyle = {
+  width: 28,
+  height: 28,
+  borderRadius: 6,
+  background: "#27272a",
+  border: "1px solid #3f3f46",
+  color: "#d4d4d8",
+  fontSize: 16,
+  cursor: "pointer",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  lineHeight: 1,
 };
 
-export default function CNCControlPanel() {
-  const [emergency, setEmergency] = useState(false);
+function EmergencyStop() {
+  const [active, setActive] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const handleClick = async () => {
+    const next = !active;
+    setActive(next);
+    setBusy(true);
+    try {
+      await sendCommand("emergency");
+    } catch (e) {
+      console.error("emergency", e);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
-    <div className="min-h-screen bg-black flex items-center justify-center p-8">
-      <div className="bg-zinc-900 border-4 border-zinc-700 rounded-2xl p-10 shadow-2xl">
-        {/* TOP BUTTONS */}
-        <div className="grid grid-cols-6 gap-10 mb-12">
-          {buttonsTop.map((btn) => (
-            <CNCButton key={btn.label} label={btn.label} color={btn.color} />
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        gap: 10,
+      }}
+    >
+      <span
+        style={{
+          color: active ? "#ef4444" : "#7f1d1d",
+          fontSize: 11,
+          fontWeight: 700,
+          letterSpacing: "0.15em",
+          fontFamily: "monospace",
+          animation: active ? "pulse 1s infinite" : "none",
+        }}
+      >
+        E-STOP
+      </span>
+
+      <div
+        style={{
+          width: 96,
+          height: 96,
+          borderRadius: "50%",
+          background: "#1c0a0a",
+          border: `6px solid ${active ? "#ef4444" : "#7f1d1d"}`,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          boxShadow: active
+            ? "0 0 40px #ef444499, 0 0 80px #ef444433"
+            : "0 0 12px #ef444422",
+          transition: "all 0.2s",
+        }}
+      >
+        <button
+          onClick={handleClick}
+          disabled={busy}
+          style={{
+            width: 76,
+            height: 76,
+            borderRadius: "50%",
+            background: active ? "#ef4444" : "#991b1b",
+            border: "none",
+            cursor: busy ? "wait" : "pointer",
+            boxShadow: active
+              ? "inset 0 -4px 8px rgba(0,0,0,0.4)"
+              : "inset 0 4px 8px rgba(0,0,0,0.4)",
+            transform: active ? "translateY(2px)" : "translateY(0)",
+            transition: "all 0.15s",
+            position: "relative",
+            overflow: "hidden",
+          }}
+        >
+          <div
+            style={{
+              position: "absolute",
+              top: 8,
+              left: "50%",
+              transform: "translateX(-50%)",
+              width: "60%",
+              height: "40%",
+              borderRadius: "50%",
+              background: "rgba(255,255,255,0.15)",
+              pointerEvents: "none",
+            }}
+          />
+        </button>
+      </div>
+
+      <span
+        style={{
+          color: "#52525b",
+          fontSize: 9,
+          fontFamily: "monospace",
+          letterSpacing: "0.05em",
+        }}
+      >
+        {active ? "TRIGGERED" : "ARMED"}
+      </span>
+
+      <style>{`
+        @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+      `}</style>
+    </div>
+  );
+}
+
+export default function CNCControlPanel() {
+  return (
+    <div
+      style={{
+        minHeight: "100vh",
+        background: "#09090b",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 32,
+        fontFamily: "'Courier New', monospace",
+      }}
+    >
+      <div
+        style={{
+          background: "#111113",
+          border: "2px solid #27272a",
+          borderRadius: 20,
+          padding: "36px 40px",
+          boxShadow:
+            "0 32px 64px rgba(0,0,0,0.8), inset 0 1px 0 rgba(255,255,255,0.04)",
+          position: "relative",
+        }}
+      >
+        {/* Header */}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            marginBottom: 28,
+            borderBottom: "1px solid #1e1e20",
+            paddingBottom: 16,
+          }}
+        >
+          <div>
+            <div
+              style={{ color: "#71717a", fontSize: 9, letterSpacing: "0.2em" }}
+            >
+              CNC MACHINE
+            </div>
+            <div
+              style={{
+                color: "#d4d4d8",
+                fontSize: 14,
+                fontWeight: 700,
+                letterSpacing: "0.1em",
+              }}
+            >
+              CONTROL PANEL
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 6 }}>
+            {["POWER", "READY", "ALARM"].map((l, i) => (
+              <div
+                key={l}
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  gap: 4,
+                }}
+              >
+                <div
+                  style={{
+                    width: 8,
+                    height: 8,
+                    borderRadius: "50%",
+                    background:
+                      i === 0 ? "#22c55e" : i === 1 ? "#22c55e" : "#3f3f46",
+                    boxShadow: i < 2 ? "0 0 6px #22c55e" : "none",
+                  }}
+                />
+                <span
+                  style={{
+                    color: "#52525b",
+                    fontSize: 7,
+                    letterSpacing: "0.1em",
+                  }}
+                >
+                  {l}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Top Row */}
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(6, 1fr)",
+            gap: 20,
+            marginBottom: 28,
+          }}
+        >
+          {BUTTONS_TOP.map((btn) => (
+            <CNCButton key={btn.label} {...btn} />
           ))}
         </div>
 
-        {/* BOTTOM SECTION */}
-        <div className="flex items-center gap-10">
-          {/* Rotary Knob */}
+        {/* Divider */}
+        <div style={{ height: 1, background: "#1e1e20", marginBottom: 28 }} />
+
+        {/* Bottom Section */}
+        <div style={{ display: "flex", alignItems: "center", gap: 28 }}>
           <RotaryKnob />
 
-          {/* Bottom Buttons */}
-          <div className="grid grid-cols-6 gap-10">
-            {buttonsBottom.map((btn) => (
-              <CNCButton key={btn.label} label={btn.label} color={btn.color} />
+          <div style={{ width: 1, height: 120, background: "#1e1e20" }} />
+
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(6, 1fr)",
+              gap: 20,
+              flex: 1,
+            }}
+          >
+            {BUTTONS_BOTTOM.map((btn) => (
+              <CNCButton key={btn.label} {...btn} />
             ))}
           </div>
 
-          {/* Emergency */}
-          <div className="flex flex-col items-center ml-10">
-            <div
-              className={`
-      font-bold mb-4 text-2xl tracking-widest
-      ${emergency ? "text-red-400 animate-pulse" : "text-red-700"}
-    `}
-            >
-              EMERGENCY
-            </div>
+          <div style={{ width: 1, height: 120, background: "#1e1e20" }} />
 
-            <button
-              onClick={() => {
-                setEmergency(!emergency);
+          <EmergencyStop />
+        </div>
 
-                sendCommand("emergency");
-              }}
-              className={`
-      w-24 h-24 rounded-full
-      border-8 border-red-900
-      transition-all duration-200
-
-      ${
-        emergency
-          ? `
-            bg-red-500
-            animate-pulse
-            shadow-[0_0_60px_rgba(255,0,0,1)]
-            scale-110
-          `
-          : `
-            bg-red-700
-            shadow-[0_0_20px_rgba(255,0,0,0.5)]
-          `
-      }
-
-      hover:scale-110
-      active:scale-95
-    `}
-            >
-              <div className="w-full h-full rounded-full bg-linear-to-b from-white/30 to-transparent"></div>
-            </button>
-          </div>
+        {/* Footer */}
+        <div
+          style={{
+            marginTop: 24,
+            borderTop: "1px solid #1e1e20",
+            paddingTop: 12,
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+          }}
+        >
+          <span
+            style={{ color: "#3f3f46", fontSize: 9, letterSpacing: "0.1em" }}
+          >
+            MODBUS TCP · 127.0.0.1:502
+          </span>
+          <span
+            style={{ color: "#3f3f46", fontSize: 9, letterSpacing: "0.1em" }}
+          >
+            API · localhost:5000
+          </span>
         </div>
       </div>
     </div>
