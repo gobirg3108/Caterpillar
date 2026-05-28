@@ -210,7 +210,7 @@ export default function CNCControlPanel() {
       active:scale-95
     `}
             >
-              <div className="w-full h-full rounded-full bg-gradient-to-b from-white/30 to-transparent"></div>
+              <div className="w-full h-full rounded-full bg-linear-to-b from-white/30 to-transparent"></div>
             </button>
           </div>
         </div>
