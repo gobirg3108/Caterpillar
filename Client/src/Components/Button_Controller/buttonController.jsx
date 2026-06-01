@@ -2,28 +2,32 @@ import React, { useState, useCallback } from "react";
 
 const API_BASE = "http://localhost:5000";
 
-const sendCommand = async (endpoint) => {
-  const res = await fetch(`${API_BASE}/${endpoint}`, { method: "POST" });
+const sendCommand = async (endpoint, body = null) => {
+  const res = await fetch(`${API_BASE}/${endpoint}`, {
+    method: "POST",
+    headers: body ? { "Content-Type": "application/json" } : {},
+    body: body ? JSON.stringify(body) : undefined,
+  });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
 };
 
 const BUTTONS_TOP = [
-  { label: "MEMORY", color: "green", endpoint: null },
-  { label: "EDIT", color: "yellow", endpoint: null },
-  { label: "MDI", color: "yellow", endpoint: null },
+  { label: "MEMORY", color: "green", endpoint: "memory" },
+  { label: "EDIT", color: "yellow", endpoint: "edit" },
+  { label: "MDI", color: "yellow", endpoint: "mdi" },
   { label: "OPTIONAL STOP", color: "yellow", endpoint: "optional-stop" },
   { label: "SINGLE BLOCK", color: "yellow", endpoint: "single-block" },
   { label: "FEED HOLD", color: "red", endpoint: "feed-hold" },
 ];
 
 const BUTTONS_BOTTOM = [
-  { label: "TABLE STOP", color: "red", endpoint: null },
+  { label: "TABLE STOP", color: "red", endpoint: "table-stop" },
   { label: "CYCLE START", color: "green", endpoint: "cycle-start" },
   { label: "COOLANT ON", color: "green", endpoint: "coolant" },
   { label: "BLOCK SKIP", color: "yellow", endpoint: "block-skip" },
   { label: "RESET", color: "red", endpoint: "reset" },
-  { label: "DOOR I/L", color: "green", endpoint: null },
+  { label: "DOOR I/L", color: "green", endpoint: "door-interlock" },
 ];
 
 const COLOR_STYLES = {
@@ -41,7 +45,7 @@ const COLOR_STYLES = {
 };
 
 function CNCButton({ label, color, endpoint }) {
-  const [lit, setLit] = useState(true);
+  const [lit, setLit] = useState(false);
   const [busy, setBusy] = useState(false);
   const [flash, setFlash] = useState(false);
 
@@ -137,14 +141,46 @@ function CNCButton({ label, color, endpoint }) {
 
 function RotaryKnob() {
   const [angle, setAngle] = useState(0);
-  const labels = ["-50", "-25", "0", "+25", "+50"];
-  const min = -120,
+  const [busy, setBusy] = useState(false);
+  const [inputVal, setInputVal] = useState("0");
+
+  const labels = ["0", "30", "60", "90", "120"];
+  const min = 0,
     max = 120;
 
-  const rotate = (delta) =>
-    setAngle((v) => Math.max(min, Math.min(max, v + delta)));
+  const handleManualInput = async (e) => {
+    if (e.key === "Enter") {
+      const val = Math.max(0, Math.min(120, Number(inputVal)));
+      setAngle(val);
+      setInputVal(String(val));
+      setBusy(true);
+      try {
+        await sendCommand("feed-rate", { value: val });
+      } catch (e) {
+        console.error("feed-rate", e);
+      } finally {
+        setBusy(false);
+      }
+    }
+  };
+
+  const rotate = async (delta) => {
+    const newAngle = Math.max(min, Math.min(max, angle + delta));
+    setAngle(newAngle);
+    setInputVal(String(newAngle));
+    if (busy) return;
+    setBusy(true);
+    try {
+      await sendCommand("feed-rate", { value: newAngle });
+    } catch (e) {
+      console.error("feed-rate", e);
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const pct = ((angle - min) / (max - min)) * 100;
+  const rotation = ((angle - min) / (max - min)) * 240 - 120;
 
   return (
     <div
@@ -194,7 +230,7 @@ function RotaryKnob() {
                 y={56 + r * Math.sin(a) + 3}
                 textAnchor="middle"
                 fontSize={8}
-                fill="#52525b"
+                fill="#d6d3d3"
                 fontFamily="monospace"
               >
                 {l}
@@ -213,7 +249,7 @@ function RotaryKnob() {
             borderRadius: "50%",
             background: "linear-gradient(135deg, #52525b, #27272a)",
             border: "3px solid #3f3f46",
-            transform: `translate(-50%, -50%) rotate(${angle}deg)`,
+            transform: `translate(-50%, -50%) rotate(${rotation}deg)`,
             transition: "transform 0.2s ease",
             boxShadow: "0 4px 12px rgba(0,0,0,0.6)",
             display: "flex",
@@ -237,18 +273,51 @@ function RotaryKnob() {
         <button onClick={() => rotate(-10)} style={knobBtnStyle}>
           −
         </button>
-        <span
+
+        <input
+          type="number"
+          min={0}
+          max={120}
+          value={inputVal}
+          onChange={(e) => {
+            const raw = e.target.value;
+            if (raw === "" || raw === "-") {
+              setInputVal(raw);
+              return;
+            }
+            const num = Number(raw);
+            if (!isNaN(num)) {
+              setInputVal(String(Math.min(120, Math.max(0, num))));
+            }
+          }}
+          onKeyDown={handleManualInput}
+          onBlur={async () => {
+            const val = Math.max(0, Math.min(120, Number(inputVal) || 0));
+            setAngle(val);
+            setInputVal(String(val));
+            setBusy(true);
+            try {
+              await sendCommand("feed-rate", { value: val });
+            } catch (e) {
+              console.error("feed-rate", e);
+            } finally {
+              setBusy(false);
+            }
+          }}
           style={{
+            width: 56,
+            background: "#18181b",
+            border: "1px solid #3f3f46",
+            borderRadius: 6,
             color: "#a1a1aa",
             fontSize: 11,
             fontFamily: "monospace",
-            minWidth: 48,
             textAlign: "center",
+            padding: "3px 4px",
+            outline: "none",
           }}
-        >
-          {angle > 0 ? "+" : ""}
-          {angle}°
-        </span>
+        />
+
         <button onClick={() => rotate(10)} style={knobBtnStyle}>
           +
         </button>
