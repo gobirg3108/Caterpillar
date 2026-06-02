@@ -1,6 +1,7 @@
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useEffect, useRef } from "react";
 
 const API_BASE = "http://localhost:5000";
+const WS_URL = "ws://localhost:5000/ws";
 
 const sendCommand = async (endpoint, body = null) => {
   const res = await fetch(`${API_BASE}/${endpoint}`, {
@@ -13,21 +14,46 @@ const sendCommand = async (endpoint, body = null) => {
 };
 
 const BUTTONS_TOP = [
-  { label: "MEMORY", color: "green", endpoint: "memory" },
-  { label: "EDIT", color: "yellow", endpoint: "edit" },
-  { label: "MDI", color: "yellow", endpoint: "mdi" },
-  { label: "OPTIONAL STOP", color: "yellow", endpoint: "optional-stop" },
-  { label: "SINGLE BLOCK", color: "yellow", endpoint: "single-block" },
-  { label: "FEED HOLD", color: "red", endpoint: "feed-hold" },
+  { label: "MEMORY", color: "green", endpoint: "memory", coilIndex: 0 },
+  { label: "EDIT", color: "yellow", endpoint: "edit", coilIndex: 1 },
+  { label: "MDI", color: "yellow", endpoint: "mdi", coilIndex: 2 },
+  {
+    label: "OPTIONAL STOP",
+    color: "yellow",
+    endpoint: "optional-stop",
+    coilIndex: 3,
+  },
+  {
+    label: "SINGLE BLOCK",
+    color: "yellow",
+    endpoint: "single-block",
+    coilIndex: 4,
+  },
+  { label: "FEED HOLD", color: "red", endpoint: "feed-hold", coilIndex: 5 },
 ];
 
 const BUTTONS_BOTTOM = [
-  { label: "TABLE STOP", color: "red", endpoint: "table-stop" },
-  { label: "CYCLE START", color: "green", endpoint: "cycle-start" },
-  { label: "COOLANT ON", color: "green", endpoint: "coolant" },
-  { label: "BLOCK SKIP", color: "yellow", endpoint: "block-skip" },
-  { label: "RESET", color: "red", endpoint: "reset" },
-  { label: "DOOR I/L", color: "green", endpoint: "door-interlock" },
+  { label: "TABLE STOP", color: "red", endpoint: "table-stop", coilIndex: 6 },
+  {
+    label: "CYCLE START",
+    color: "green",
+    endpoint: "cycle-start",
+    coilIndex: 7,
+  },
+  { label: "COOLANT ON", color: "green", endpoint: "coolant", coilIndex: 8 },
+  {
+    label: "BLOCK SKIP",
+    color: "yellow",
+    endpoint: "block-skip",
+    coilIndex: 9,
+  },
+  { label: "RESET", color: "red", endpoint: "reset", coilIndex: 10 },
+  {
+    label: "DOOR I/L",
+    color: "green",
+    endpoint: "door-interlock",
+    coilIndex: 11,
+  },
 ];
 
 const COLOR_STYLES = {
@@ -44,16 +70,68 @@ const COLOR_STYLES = {
   red: { active: "#ef4444", glow: "0 0 18px #ef444488", indicator: "#dc2626" },
 };
 
-function CNCButton({ label, color, endpoint }) {
-  const [lit, setLit] = useState(false);
+// ════════════════════════════════════════
+//  WebSocket Hook
+// ════════════════════════════════════════
+
+function useModbusSocket(onData) {
+  const wsRef = useRef(null);
+
+  useEffect(() => {
+    let ws;
+    let retryTimer;
+
+    const connect = () => {
+      ws = new WebSocket(WS_URL);
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        console.log("✅ WebSocket connected");
+      };
+
+      ws.onmessage = (e) => {
+        try {
+          const data = JSON.parse(e.data);
+          onData(data);
+        } catch (err) {
+          console.error("WS parse error", err);
+        }
+      };
+
+      ws.onclose = () => {
+        console.warn("⚠️ WebSocket disconnected — retry in 2s");
+        retryTimer = setTimeout(connect, 2000); // auto reconnect
+      };
+
+      ws.onerror = (err) => {
+        console.error("WS error", err);
+        ws.close();
+      };
+    };
+
+    connect();
+
+    return () => {
+      clearTimeout(retryTimer);
+      ws?.close();
+    };
+  }, []);
+}
+
+// ════════════════════════════════════════
+//  CNC Button
+// ════════════════════════════════════════
+
+function CNCButton({ label, color, endpoint, coilIndex, coilStates }) {
   const [busy, setBusy] = useState(false);
   const [flash, setFlash] = useState(false);
+
+  const lit = coilStates?.[coilIndex] ?? false;
 
   const style = COLOR_STYLES[color];
 
   const handleClick = useCallback(async () => {
-    setLit((v) => !v);
-    if (!endpoint) return;
+    if (!endpoint || busy) return;
     setBusy(true);
     try {
       await sendCommand(endpoint);
@@ -64,10 +142,7 @@ function CNCButton({ label, color, endpoint }) {
     } finally {
       setBusy(false);
     }
-  }, [endpoint]);
-
-  const btnColor = lit ? style.active : "#3f3f46";
-  const btnShadow = lit ? style.glow : "none";
+  }, [endpoint, busy]);
 
   return (
     <div
@@ -104,8 +179,8 @@ function CNCButton({ label, color, endpoint }) {
           height: 60,
           borderRadius: "50%",
           border: `3px solid ${lit ? style.indicator : "#27272a"}`,
-          background: btnColor,
-          boxShadow: btnShadow,
+          background: lit ? style.active : "#3f3f46",
+          boxShadow: lit ? style.glow : "none",
           cursor: busy ? "wait" : "pointer",
           transition: "all 0.15s ease",
           transform: flash ? "scale(0.9)" : "scale(1)",
@@ -139,39 +214,30 @@ function CNCButton({ label, color, endpoint }) {
   );
 }
 
-function RotaryKnob() {
-  const [angle, setAngle] = useState(0);
+// ════════════════════════════════════════
+//  Rotary Knob
+// ════════════════════════════════════════
+
+function RotaryKnob({ feedRate }) {
   const [busy, setBusy] = useState(false);
   const [inputVal, setInputVal] = useState("0");
 
-  const labels = ["0", "30", "60", "90", "120"];
+  useEffect(() => {
+    setInputVal(String(feedRate));
+  }, [feedRate]);
+
+  const angle = feedRate ?? 0;
   const min = 0,
     max = 120;
+  const labels = ["0", "30", "60", "90", "120"];
+  const pct = ((angle - min) / (max - min)) * 100;
+  const rotation = ((angle - min) / (max - min)) * 240 - 120;
 
-  const handleManualInput = async (e) => {
-    if (e.key === "Enter") {
-      const val = Math.max(0, Math.min(120, Number(inputVal)));
-      setAngle(val);
-      setInputVal(String(val));
-      setBusy(true);
-      try {
-        await sendCommand("feed-rate", { value: val });
-      } catch (e) {
-        console.error("feed-rate", e);
-      } finally {
-        setBusy(false);
-      }
-    }
-  };
-
-  const rotate = async (delta) => {
-    const newAngle = Math.max(min, Math.min(max, angle + delta));
-    setAngle(newAngle);
-    setInputVal(String(newAngle));
+  const sendFeedRate = async (val) => {
     if (busy) return;
     setBusy(true);
     try {
-      await sendCommand("feed-rate", { value: newAngle });
+      await sendCommand("feed-rate", { value: val });
     } catch (e) {
       console.error("feed-rate", e);
     } finally {
@@ -179,8 +245,11 @@ function RotaryKnob() {
     }
   };
 
-  const pct = ((angle - min) / (max - min)) * 100;
-  const rotation = ((angle - min) / (max - min)) * 240 - 120;
+  const rotate = (delta) => {
+    const newVal = Math.max(min, Math.min(max, angle + delta));
+    setInputVal(String(newVal));
+    sendFeedRate(newVal);
+  };
 
   return (
     <div
@@ -222,12 +291,11 @@ function RotaryKnob() {
             const a =
               ((i / (labels.length - 1)) * 240 - 120) * (Math.PI / 180) -
               Math.PI / 2;
-            const r = 50;
             return (
               <text
                 key={l}
-                x={56 + r * Math.cos(a)}
-                y={56 + r * Math.sin(a) + 3}
+                x={56 + 50 * Math.cos(a)}
+                y={56 + 50 * Math.sin(a) + 3}
                 textAnchor="middle"
                 fontSize={8}
                 fill="#d6d3d3"
@@ -238,7 +306,6 @@ function RotaryKnob() {
             );
           })}
         </svg>
-
         <div
           style={{
             position: "absolute",
@@ -273,36 +340,23 @@ function RotaryKnob() {
         <button onClick={() => rotate(-10)} style={knobBtnStyle}>
           −
         </button>
-
         <input
           type="number"
           min={0}
           max={120}
           value={inputVal}
-          onChange={(e) => {
-            const raw = e.target.value;
-            if (raw === "" || raw === "-") {
-              setInputVal(raw);
-              return;
-            }
-            const num = Number(raw);
-            if (!isNaN(num)) {
-              setInputVal(String(Math.min(120, Math.max(0, num))));
+          onChange={(e) => setInputVal(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              const val = Math.max(0, Math.min(120, Number(inputVal) || 0));
+              setInputVal(String(val));
+              sendFeedRate(val);
             }
           }}
-          onKeyDown={handleManualInput}
-          onBlur={async () => {
+          onBlur={() => {
             const val = Math.max(0, Math.min(120, Number(inputVal) || 0));
-            setAngle(val);
             setInputVal(String(val));
-            setBusy(true);
-            try {
-              await sendCommand("feed-rate", { value: val });
-            } catch (e) {
-              console.error("feed-rate", e);
-            } finally {
-              setBusy(false);
-            }
+            sendFeedRate(val);
           }}
           style={{
             width: 56,
@@ -317,7 +371,6 @@ function RotaryKnob() {
             outline: "none",
           }}
         />
-
         <button onClick={() => rotate(10)} style={knobBtnStyle}>
           +
         </button>
@@ -360,13 +413,207 @@ const knobBtnStyle = {
   lineHeight: 1,
 };
 
-function EmergencyStop() {
-  const [active, setActive] = useState(false);
+// ════════════════════════════════════════
+//  Reset All Button
+// ════════════════════════════════════════
+
+function ResetAllButton() {
+  const [busy, setBusy] = useState(false);
+  const [flash, setFlash] = useState(false);
+
+  const handleClick = useCallback(async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await sendCommand("reset-all");
+      setFlash(true);
+      setTimeout(() => setFlash(false), 800);
+    } catch (e) {
+      console.error("reset-all", e);
+    } finally {
+      setBusy(false);
+    }
+  }, [busy]);
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        gap: 8,
+      }}
+    >
+      <span
+        style={{
+          color: "#71717a",
+          fontSize: 9,
+          fontWeight: 700,
+          letterSpacing: "0.08em",
+          fontFamily: "'Courier New', monospace",
+          textAlign: "center",
+        }}
+      >
+        RESET ALL
+      </span>
+
+      <button
+        onClick={handleClick}
+        disabled={busy}
+        title="All coils OFF + values reset"
+        style={{
+          width: 72,
+          height: 36,
+          borderRadius: 8,
+          border: `2px solid ${flash ? "#22c55e" : "#52525b"}`,
+          background: flash ? "#14532d" : "#27272a",
+          color: flash ? "#22c55e" : "#a1a1aa",
+          fontSize: 10,
+          fontWeight: 700,
+          fontFamily: "'Courier New', monospace",
+          letterSpacing: "0.08em",
+          cursor: busy ? "wait" : "pointer",
+          boxShadow: flash ? "0 0 12px #22c55e55" : "none",
+          transition: "all 0.2s ease",
+          transform: flash ? "scale(0.95)" : "scale(1)",
+        }}
+      >
+        {busy ? "..." : "⟳ ALL OFF"}
+      </button>
+
+      <span
+        style={{
+          color: "#3f3f46",
+          fontSize: 8,
+          fontFamily: "monospace",
+          textAlign: "center",
+        }}
+      >
+        COILS → 0
+      </span>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════
+//  Auto / Manual Toggle
+// ════════════════════════════════════════
+
+function AutoManualToggle() {
+  const [isAuto, setIsAuto] = useState(false);
   const [busy, setBusy] = useState(false);
 
+  const handleToggle = useCallback(async () => {
+    if (busy) return;
+    setBusy(true);
+    const next = !isAuto;
+    try {
+      await sendCommand(next ? "auto-click/start" : "auto-click/stop");
+      setIsAuto(next);
+    } catch (e) {
+      console.error("auto-toggle", e);
+    } finally {
+      setBusy(false);
+    }
+  }, [isAuto, busy]);
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        gap: 6,
+      }}
+    >
+      <span
+        style={{
+          color: "#71717a",
+          fontSize: 9,
+          fontWeight: 700,
+          letterSpacing: "0.1em",
+          fontFamily: "monospace",
+        }}
+      >
+        MODE
+      </span>
+
+      {/* Slide toggle */}
+      <div
+        onClick={handleToggle}
+        style={{
+          width: 72,
+          height: 30,
+          borderRadius: 15,
+          background: isAuto ? "#166534" : "#27272a",
+          border: `2px solid ${isAuto ? "#22c55e" : "#52525b"}`,
+          boxShadow: isAuto ? "0 0 12px #22c55e55" : "none",
+          cursor: busy ? "wait" : "pointer",
+          position: "relative",
+          transition: "all 0.3s ease",
+          display: "flex",
+          alignItems: "center",
+          padding: "0 4px",
+        }}
+      >
+        {/* Labels inside track */}
+        <span
+          style={{
+            position: "absolute",
+            left: isAuto ? 8 : "auto",
+            right: isAuto ? "auto" : 8,
+            fontSize: 8,
+            fontWeight: 700,
+            fontFamily: "monospace",
+            color: isAuto ? "#22c55e" : "#71717a",
+            letterSpacing: "0.05em",
+            pointerEvents: "none",
+            transition: "all 0.3s",
+          }}
+        >
+          {isAuto ? "AUTO" : "MAN"}
+        </span>
+
+        {/* Thumb */}
+        <div
+          style={{
+            width: 22,
+            height: 22,
+            borderRadius: "50%",
+            background: isAuto ? "#22c55e" : "#52525b",
+            boxShadow: isAuto ? "0 0 8px #22c55e" : "none",
+            position: "absolute",
+            left: isAuto ? "calc(100% - 26px)" : 4,
+            transition: "all 0.3s ease",
+          }}
+        />
+      </div>
+
+      <span
+        style={{
+          color: isAuto ? "#22c55e" : "#52525b",
+          fontSize: 8,
+          fontFamily: "monospace",
+          letterSpacing: "0.05em",
+          transition: "color 0.3s",
+        }}
+      >
+        {isAuto ? "RUNNING" : "STANDBY"}
+      </span>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════
+//  Emergency Stop
+// ════════════════════════════════════════
+
+function EmergencyStop({ coilStates }) {
+  const [busy, setBusy] = useState(false);
+  const active = coilStates?.[12] ?? false; // coil 12 = emergency
+
   const handleClick = async () => {
-    const next = !active;
-    setActive(next);
+    if (busy) return;
     setBusy(true);
     try {
       await sendCommand("emergency");
@@ -398,7 +645,6 @@ function EmergencyStop() {
       >
         E-STOP
       </span>
-
       <div
         style={{
           width: 96,
@@ -449,7 +695,6 @@ function EmergencyStop() {
           />
         </button>
       </div>
-
       <span
         style={{
           color: "#52525b",
@@ -460,15 +705,26 @@ function EmergencyStop() {
       >
         {active ? "TRIGGERED" : "ARMED"}
       </span>
-
-      <style>{`
-        @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
-      `}</style>
+      <style>{`@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }`}</style>
     </div>
   );
 }
 
+// ════════════════════════════════════════
+//  Main Panel
+// ════════════════════════════════════════
+
 export default function CNCControlPanel() {
+  const [coilStates, setCoilStates] = useState({});
+  const [feedRate, setFeedRate] = useState(0);
+  const [wsStatus, setWsStatus] = useState("connecting"); // connecting | online | offline
+
+  useModbusSocket((data) => {
+    if (data.coil_states !== undefined) setCoilStates(data.coil_states);
+    if (data.feed_rate !== undefined) setFeedRate(data.feed_rate);
+    setWsStatus("online");
+  });
+
   return (
     <div
       style={{
@@ -520,7 +776,43 @@ export default function CNCControlPanel() {
               CONTROL PANEL
             </div>
           </div>
-          <div style={{ display: "flex", gap: 6 }}>
+
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            {/* WS status indicator */}
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                gap: 4,
+                marginRight: 8,
+              }}
+            >
+              <div
+                style={{
+                  width: 8,
+                  height: 8,
+                  borderRadius: "50%",
+                  background:
+                    wsStatus === "online"
+                      ? "#22c55e"
+                      : wsStatus === "connecting"
+                        ? "#eab308"
+                        : "#ef4444",
+                  boxShadow: wsStatus === "online" ? "0 0 6px #22c55e" : "none",
+                }}
+              />
+              <span
+                style={{
+                  color: "#52525b",
+                  fontSize: 7,
+                  letterSpacing: "0.1em",
+                }}
+              >
+                WS
+              </span>
+            </div>
+
             {["POWER", "READY", "ALARM"].map((l, i) => (
               <div
                 key={l}
@@ -565,19 +857,16 @@ export default function CNCControlPanel() {
           }}
         >
           {BUTTONS_TOP.map((btn) => (
-            <CNCButton key={btn.label} {...btn} />
+            <CNCButton key={btn.label} {...btn} coilStates={coilStates} />
           ))}
         </div>
 
-        {/* Divider */}
         <div style={{ height: 1, background: "#1e1e20", marginBottom: 28 }} />
 
         {/* Bottom Section */}
         <div style={{ display: "flex", alignItems: "center", gap: 28 }}>
-          <RotaryKnob />
-
+          <RotaryKnob feedRate={feedRate} />
           <div style={{ width: 1, height: 120, background: "#1e1e20" }} />
-
           <div
             style={{
               display: "grid",
@@ -587,13 +876,11 @@ export default function CNCControlPanel() {
             }}
           >
             {BUTTONS_BOTTOM.map((btn) => (
-              <CNCButton key={btn.label} {...btn} />
+              <CNCButton key={btn.label} {...btn} coilStates={coilStates} />
             ))}
           </div>
-
           <div style={{ width: 1, height: 120, background: "#1e1e20" }} />
-
-          <EmergencyStop />
+          <EmergencyStop coilStates={coilStates} />
         </div>
 
         {/* Footer */}
@@ -612,6 +899,11 @@ export default function CNCControlPanel() {
           >
             MODBUS TCP · 127.0.0.1:502
           </span>
+
+          <AutoManualToggle />
+
+          <ResetAllButton />
+
           <span
             style={{ color: "#3f3f46", fontSize: 9, letterSpacing: "0.1em" }}
           >
