@@ -2,12 +2,16 @@ import asyncio
 import json
 import logging
 import threading
+import os
+import sys
 
 import pyautogui
 import time
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from pymodbus.client import ModbusTcpClient
 
@@ -16,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="CNC Modbus API", version="1.0.0")
 
+# ── Middleware FIRST (before any routes or mounts) ──
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -28,7 +33,6 @@ MODBUS_PORT = 502
 TOTAL_COILS = 13
 FEED_RATE_REGISTER = 0
 
-# ── Connected WebSocket clients list ──
 connected_clients: list[WebSocket] = []
 
 # ════════════════════════════════════════
@@ -36,7 +40,6 @@ connected_clients: list[WebSocket] = []
 # ════════════════════════════════════════
 
 BUTTONS = [
-    # ( X,     Y,    "Button Name",   delay_seconds )
     ( 1095,  450,  "MEMORY",          5 ),
     ( 1230,  450,  "EDIT",            5 ),
     ( 1370,  450,  "MDI",             5 ),
@@ -51,20 +54,17 @@ BUTTONS = [
     ( 1660,  650,  "DOOR I/L",        5 ),
     ( 1790,  645,  "E-STOP",          5 ),
     ( 1555,  810,  "RESET ALL",       5 ),
-    
     ( 1095,  450,  "MEMORY",          5 ),
     ( 1510,  450,  "OPTIONAL STOP",   5 ),
     ( 1645,  450,  "SINGLE BLOCK",    5 ),
     ( 1414,  650,  "COOLANT ON",      5 ),
     ( 1555,  810,  "RESET ALL",       5 ),
     ( 1355,  810,  "AUTTO OFF",       5 ),
-
 ]
 
 MOVE_DURATION = 0.4
 pyautogui.FAILSAFE = True
 
-# Auto mode state
 auto_mode_active = False
 auto_thread: threading.Thread | None = None
 auto_stop_event = threading.Event()
@@ -82,7 +82,6 @@ def run_auto_click():
             pyautogui.click()
         except Exception as e:
             logger.error(f"Auto click error at {name}: {e}")
-        # wait with early-exit support
         for _ in range(delay * 10):
             if auto_stop_event.is_set():
                 break
@@ -98,7 +97,6 @@ def get_client():
     client = ModbusTcpClient(MODBUS_HOST, port=MODBUS_PORT)
     connected = client.connect()
     return client, connected
-
 
 def read_all_coils() -> dict:
     client, connected = get_client()
@@ -119,7 +117,6 @@ def read_all_coils() -> dict:
     finally:
         client.close()
 
-
 def read_feed_rate() -> int:
     client, connected = get_client()
     if not connected:
@@ -138,7 +135,6 @@ def read_feed_rate() -> int:
         return 0
     finally:
         client.close()
-
 
 def toggle_coil(coil: int) -> dict:
     client, connected = get_client()
@@ -164,7 +160,6 @@ def toggle_coil(coil: int) -> dict:
     finally:
         client.close()
 
-
 def write_feed_rate(value: int) -> dict:
     client, connected = get_client()
     if not connected:
@@ -179,7 +174,6 @@ def write_feed_rate(value: int) -> dict:
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         client.close()
-
 
 def reset_all_coils() -> dict:
     client, connected = get_client()
@@ -200,7 +194,7 @@ def reset_all_coils() -> dict:
 
 
 # ════════════════════════════════════════
-#  WebSocket — broadcast helper
+#  WebSocket
 # ════════════════════════════════════════
 
 async def broadcast(data: dict):
@@ -214,11 +208,6 @@ async def broadcast(data: dict):
     for ws in dead:
         connected_clients.remove(ws)
 
-
-# ════════════════════════════════════════
-#  Background task — Modbus poll & push
-# ════════════════════════════════════════
-
 async def modbus_watcher():
     previous = {}
     while True:
@@ -230,26 +219,18 @@ async def modbus_watcher():
         feed  = await loop.run_in_executor(None, read_feed_rate)
         current = {"coil_states": coils, "feed_rate": feed}
         if current != previous:
-            logger.info(f"Modbus changed → push to {len(connected_clients)} clients")
             await broadcast(current)
             previous = current
-
 
 @app.on_event("startup")
 async def startup():
     asyncio.create_task(modbus_watcher())
     logger.info("Modbus watcher started ✅")
 
-
-# ════════════════════════════════════════
-#  WebSocket endpoint
-# ════════════════════════════════════════
-
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     connected_clients.append(websocket)
-    logger.info(f"WS connected — total: {len(connected_clients)}")
     loop = asyncio.get_event_loop()
     coils = await loop.run_in_executor(None, read_all_coils)
     feed  = await loop.run_in_executor(None, read_feed_rate)
@@ -259,7 +240,6 @@ async def websocket_endpoint(websocket: WebSocket):
             await websocket.receive_text()
     except WebSocketDisconnect:
         connected_clients.remove(websocket)
-        logger.info(f"WS disconnected — total: {len(connected_clients)}")
 
 
 # ════════════════════════════════════════
@@ -292,10 +272,8 @@ make_endpoint("reset",          10, "Reset")
 make_endpoint("door-interlock", 11, "Door Interlock")
 make_endpoint("emergency",      12, "Emergency")
 
-
 class FeedRateRequest(BaseModel):
     value: int
-
 
 @app.post("/feed-rate", summary="Feed Rate")
 async def feed_rate(body: FeedRateRequest):
@@ -308,7 +286,6 @@ async def feed_rate(body: FeedRateRequest):
     await broadcast({"coil_states": coils, "feed_rate": feed})
     return {"success": True, "message": "Feed Rate updated", "modbus": result}
 
-
 @app.post("/reset-all", summary="Reset All Coils and Feed Rate")
 async def reset_all():
     loop = asyncio.get_event_loop()
@@ -318,12 +295,7 @@ async def reset_all():
     await broadcast({"coil_states": coils, "feed_rate": feed})
     return {"success": True, "message": "All coils reset to OFF", "modbus": result}
 
-
-# ════════════════════════════════════════
-#  Auto Click endpoints
-# ════════════════════════════════════════
-
-@app.post("/auto-click/start", summary="Start Auto Click Sequence")
+@app.post("/auto-click/start")
 async def start_auto_click():
     global auto_mode_active, auto_thread, auto_stop_event
     if auto_mode_active and auto_thread and auto_thread.is_alive():
@@ -334,25 +306,21 @@ async def start_auto_click():
     auto_thread.start()
     return {"success": True, "message": "Auto click started"}
 
-
-@app.post("/auto-click/stop", summary="Stop Auto Click Sequence")
+@app.post("/auto-click/stop")
 async def stop_auto_click():
     global auto_mode_active
     auto_stop_event.set()
     auto_mode_active = False
     return {"success": True, "message": "Auto click stopped"}
 
-
-@app.get("/auto-click/status", summary="Auto Click Status")
+@app.get("/auto-click/status")
 async def auto_click_status():
     running = auto_mode_active and auto_thread is not None and auto_thread.is_alive()
     return {"auto_mode": running}
 
-
 @app.get("/health")
 async def health():
     return {"status": "ok", "server": "CNC Modbus API"}
-
 
 @app.get("/status")
 async def modbus_status():
@@ -367,6 +335,21 @@ async def modbus_status():
         "feed_rate": feed,
     }
 
+# ── Serve React frontend — MUST be LAST, after all API routes ──
+def get_dist_dir():
+    # Works both in dev and inside PyInstaller .exe
+    if getattr(sys, 'frozen', False):
+        base = sys._MEIPASS
+    else:
+        base = os.path.dirname(__file__)
+    return os.path.join(base, "dist")
+
+dist_dir = get_dist_dir()
+if os.path.exists(dist_dir):
+    app.mount("/", StaticFiles(directory=dist_dir, html=True), name="static")
+    logger.info(f"Serving frontend from: {dist_dir}")
+else:
+    logger.warning(f"No dist/ folder found at: {dist_dir}")
 
 if __name__ == "__main__":
     import uvicorn
